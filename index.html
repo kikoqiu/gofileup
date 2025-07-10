@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>临时文件上传</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #e0e0e0;
+            --primary-color: #007aff;
+            --success-color: #34c759;
+            --error-color: #ff3b30;
+            --input-bg: #1c1c1e;
+            --border-color: #2c2c2d;
+            --bubble-bg: #2c2c2e;
+            --bubble-self-bg: #007aff;
+            --withdraw-color: #ff9500;
+            --withdraw-hover-bg: rgba(255, 255, 255, 0.1);
+        }
+
+        html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--bg-color); color: var(--text-color); overflow: hidden; }
+        #app-container { display: flex; flex-direction: column; height: 100%; }
+
+        /* Header & Menu */
+        #header { padding: 10px 15px; background-color: var(--input-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; position: relative; flex-shrink: 0; }
+        #header h1 { font-size: 1.1em; margin: 0; font-weight: 600; }
+        #menu-btn { background: none; border: none; padding: 5px; cursor: pointer; }
+        #menu-btn svg { width: 24px; height: 24px; fill: var(--text-color); }
+        #dropdown-menu { display: none; position: absolute; top: 100%; right: 15px; background-color: #2c2c2e; border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10; overflow: hidden; }
+        #dropdown-menu a { display: block; padding: 10px 20px; color: var(--text-color); text-decoration: none; font-size: 0.9em; }
+        #dropdown-menu a:hover { background-color: #3a3a3c; }
+        #dropdown-menu a.danger { color: var(--error-color); }
+        
+        /* Message List */
+        #message-list { flex-grow: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column-reverse; }
+        .message-wrapper { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 12px; max-width: 85%; }
+        .message-wrapper.self { align-items: flex-end; align-self: flex-end; }
+        .message-item { max-width: 100%; padding: 10px 15px; border-radius: 18px; background-color: var(--bubble-bg); word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .message-wrapper.self .message-item { background-color: var(--bubble-self-bg); color: white; }
+        .message-content .filename { font-weight: bold; margin-bottom: 5px; }
+        .message-content .text-content { white-space: pre-wrap; }
+        .progress-bar-container { height: 6px; background-color: rgba(0,0,0,0.2); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+        .progress-bar { height: 100%; width: 0; background-color: white; opacity: 0.7; border-radius: 3px; transition: width 0.2s ease-out; }
+        .status-text { font-size: 0.8em; margin-top: 4px; color: rgba(255,255,255,0.7); }
+        .message-item.success .status-text, .message-item.error .status-text { display: none; }
+        .message-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.75em; color: rgba(255,255,255,0.7); margin-top: 6px; }
+        .message-wrapper.self .message-footer { color: rgba(255,255,255,0.8); }
+        .withdraw-btn { background: none; border: none; color: var(--withdraw-color); cursor: pointer; padding: 4px; margin-left: 8px; font-size: 0.9em; border-radius: 4px; }
+        .message-wrapper.self .withdraw-btn { color: rgba(255,255,255,0.8); }
+        .withdraw-btn:hover { background-color: var(--withdraw-hover-bg); }
+
+        /* Controls Area - Modern UI */
+        #controls { display: flex; align-items: flex-end; padding: 10px 15px; background-color: var(--input-bg); border-top: 1px solid var(--border-color); flex-shrink: 0; gap: 10px; }
+        #attachment-btn { background: none; border: none; padding: 8px; cursor: pointer; }
+        #attachment-btn svg { width: 28px; height: 28px; fill: var(--primary-color); }
+        #input-wrapper { flex-grow: 1; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: 18px; display: flex; align-items: flex-end; }
+        #text-input { flex-grow: 1; padding: 10px 15px; border: none; background: transparent; color: var(--text-color); outline: none; resize: none; font-size: 16px; max-height: 120px; overflow-y: auto; }
+        #send-btn { background: none; border: none; padding: 8px 15px 8px 8px; cursor: pointer; align-self: center; }
+        #send-btn svg { width: 28px; height: 28px; fill: var(--primary-color); transition: transform 0.2s ease; }
+        #send-btn.active svg { transform: scale(1.1); }
+        
+        /* Attachment popover */
+        #attachment-popover { display: none; position: fixed; bottom: 70px; left: 15px; background-color: #2c2c2e; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10; padding: 8px; }
+        .popover-item { display: flex; align-items: center; padding: 10px 15px; cursor: pointer; border-radius: 8px; }
+        .popover-item:hover { background-color: #3a3a3c; }
+        .popover-item svg { width: 24px; height: 24px; fill: var(--text-color); margin-right: 15px; }
+        
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="app-container">
+    <div id="header">
+        <h1>文件传输</h1>
+        <button id="menu-btn">
+            <svg viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" /></svg>
+        </button>
+        <div id="dropdown-menu">
+            <a href="#" id="clear-records-btn" class="danger">清空记录</a>
+        </div>
+    </div>
+    <div id="message-list"></div>
+    <div id="controls">
+        <button id="attachment-btn" title="附件">
+            <svg viewBox="0 0 24 24"><path d="M12,18A6,6 0 0,1 6,12C6,8.69 8.69,6 12,6A6,6 0 0,1 18,12C18,15.31 15.31,18 12,18M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,10.5A1.5,1.5 0 0,0 10.5,12A1.5,1.5 0 0,0 12,13.5A1.5,1.5 0 0,0 13.5,12A1.5,1.5 0 0,0 12,10.5Z" /></svg>
+        </button>
+        <div id="input-wrapper">
+            <textarea id="text-input" placeholder="输入..." rows="1"></textarea>
+            <button id="send-btn" title="发送">
+                <svg viewBox="0 0 24 24"><path d="M2,21L23,12L2,3V10L17,12L2,14V21Z" /></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="attachment-popover">
+    <div class="popover-item" id="upload-image-btn">
+        <svg viewBox="0 0 24 24"><path d="M21,19V5C21,3.89 20.1,3 19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19M8.5,13.5L11,16.5L14.5,12L19,18H5L8.5,13.5Z" /></svg>
+        <span>图片</span>
+    </div>
+    <div class="popover-item" id="upload-file-btn">
+        <svg viewBox="0 0 24 24"><path d="M13,9H18.5L13,3.5V9M6,2H14L20,8V20A2,2 0 0,1 18,22H6C4.89,22 4,21.1 4,20V4C4,2.89 4.89,2 6,2M15,18H6V20H15V18M18,15H6V17H18V15Z" /></svg>
+        <span>文件</span>
+    </div>
+</div>
+
+<input type="file" id="image-picker" accept="image/*" multiple>
+<input type="file" id="file-picker" multiple>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // --- Element Selectors ---
+    const messageList = document.getElementById('message-list');
+    const attachmentBtn = document.getElementById('attachment-btn');
+    const attachmentPopover = document.getElementById('attachment-popover');
+    const imageBtn = document.getElementById('upload-image-btn');
+    const fileBtn = document.getElementById('upload-file-btn');
+    const sendBtn = document.getElementById('send-btn');
+    const textInput = document.getElementById('text-input');
+    const imagePicker = document.getElementById('image-picker');
+    const filePicker = document.getElementById('file-picker');
+    const menuBtn = document.getElementById('menu-btn');
+    const dropdownMenu = document.getElementById('dropdown-menu');
+    const clearRecordsBtn = document.getElementById('clear-records-btn');
+
+    const STORAGE_KEY = 'mobile-upload-messages';
+    
+    // --- Storage Management ---
+    const storage = {
+        getMessages: () => {
+            const now = Date.now();
+            const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+            try {
+                const messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                const recentMessages = messages.filter(m => m.timestamp > thirtyDaysAgo);
+                if (messages.length !== recentMessages.length) {
+                    storage.saveMessages(recentMessages);
+                }
+                return recentMessages;
+            } catch (e) { return []; }
+        },
+        saveMessages: (messages) => localStorage.setItem(STORAGE_KEY, JSON.stringify(messages)),
+        addMessage: (message) => {
+            const messages = storage.getMessages();
+            messages.push(message);
+            storage.saveMessages(messages);
+        },
+        updateMessage: (id, updates) => {
+            const messages = storage.getMessages();
+            const index = messages.findIndex(m => m.id === id);
+            if (index !== -1) {
+                messages[index] = { ...messages[index], ...updates };
+                storage.saveMessages(messages);
+            }
+        },
+        removeMessage: (id) => {
+            let messages = storage.getMessages();
+            messages = messages.filter(m => m.id !== id);
+            storage.saveMessages(messages);
+        },
+        clearAll: () => localStorage.removeItem(STORAGE_KEY),
+    };
+
+    // --- Utils ---
+    const formatTimestamp = (ts) => {
+        const date = new Date(ts);
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        const hours = date.getHours().toString().padStart(2, '0');
+        const minutes = date.getMinutes().toString().padStart(2, '0');
+        return `${month}-${day} ${hours}:${minutes}`;
+    };
+    
+    const escapeHTML = (str) => {
+        return str.replace(/&/g, '&')
+                  .replace(/</g, '<')
+                  .replace(/>/g, '>')
+                  .replace(/"/g, '"')
+                  .replace(/'/g, '\'');
+    };
+
+    const generateFilenameFromText = (text) => {
+        const lines = text.split('\n');
+        let extractedName = '';
+        const invalidCharsRegex = /[<>:"/\\|?*\s]/g;
+        for (const line of lines) {
+            const sanitizedPart = line.replace(invalidCharsRegex, '');
+            if (sanitizedPart.length > 0) {
+                extractedName = sanitizedPart.substring(0, 20);
+                break;
+            }
+        }
+        return extractedName || "文本消息";
+    };
+
+    const scrollToBottom = () => { messageList.scrollTop = 0; };
+    
+    // --- UI Rendering ---
+    const renderMessage = (msg) => {
+        let contentHtml;
+        if (msg.isText) {
+            let textToDisplay = msg.content;
+            const originalText = msg.content;
+            const lines = originalText.split('\n');
+            if (lines.length > 8 || originalText.length > 100) {
+                let truncated = (lines.length > 8) ? lines.slice(0, 8).join('\n') : originalText;
+                if (truncated.length > 100) {
+                    truncated = truncated.substring(0, 100);
+                }
+                textToDisplay = truncated + '...';
+            }
+            contentHtml = `<div class="text-content">${escapeHTML(textToDisplay).replace(/\n/g, '<br>')}</div>`;
+        } else {
+            contentHtml = `<div class="filename">${escapeHTML(msg.content)}</div>`;
+        }
+        let footerHtml = '';
+        if (msg.status === 'success') {
+            const timeStr = formatTimestamp(msg.timestamp);
+            const withdrawBtnHtml = `<button class="withdraw-btn" data-id="${msg.id}" data-path="${msg.filePath}">撤回</button>`;
+            footerHtml = `<div class="message-footer"><span>${timeStr}</span>${withdrawBtnHtml}</div>`;
+        }
+        const progressHtml = msg.status === 'pending' ? `<div class="status-text">正在上传... 0%</div><div class="progress-bar-container"><div class="progress-bar"></div></div>` : '';
+        const messageHtml = `
+            <div class="message-wrapper self" id="${msg.id}">
+                <div class="message-item ${msg.status}">
+                    ${contentHtml}
+                    ${progressHtml}
+                    ${footerHtml}
+                </div>
+            </div>`;
+        messageList.insertAdjacentHTML('afterbegin', messageHtml);
+        scrollToBottom();
+    };
+
+    const loadMessages = () => {
+        messageList.innerHTML = '';
+        storage.getMessages().forEach(renderMessage);
+    };
+
+    // --- Core Logic ---
+    const handleFiles = (files) => {
+        if (!files.length) return;
+        [...files].forEach(file => uploadFile(file));
+        imagePicker.value = '';
+        filePicker.value = '';
+        attachmentPopover.style.display = 'none';
+    };
+
+    const handleSendText = () => {
+        const text = textInput.value;
+        if (!text.trim()) return;
+        const baseName = generateFilenameFromText(text);
+        const timeStr = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+        const filename = `[${timeStr}]${baseName}.txt`;
+        const textFile = new File([text], filename, { type: 'text/plain' });
+        uploadFile(textFile, text);
+        textInput.value = '';
+        textInput.style.height = 'auto';
+        sendBtn.classList.remove('active');
+    };
+    
+    const uploadFile = (file, originalTextContent = null) => {
+        const isText = originalTextContent !== null;
+        const message = { id: `msg-${Date.now()}-${Math.random()}`, content: isText ? originalTextContent : file.name, isText: isText, status: 'pending', timestamp: Date.now(), filePath: null };
+        storage.addMessage(message);
+        renderMessage(message);
+        const messageElement = document.getElementById(message.id);
+        const progressBar = messageElement.querySelector('.progress-bar');
+        const statusText = messageElement.querySelector('.status-text');
+        const formData = new FormData();
+        formData.append('file', file);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload', true);
+        xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+                const percent = Math.round((event.loaded / event.total) * 100);
+                if(progressBar) progressBar.style.width = percent + '%';
+                if(statusText) statusText.textContent = `正在上传... ${percent}%`;
+            }
+        };
+        xhr.onload = () => {
+            const messageItem = messageElement.querySelector('.message-item');
+            if (xhr.status === 200) {
+                const response = JSON.parse(xhr.responseText);
+                storage.updateMessage(message.id, { status: 'success', filePath: response.filePath, timestamp: Date.now() });
+                messageElement.remove();
+                loadMessages();
+            } else {
+                storage.updateMessage(message.id, { status: 'error' });
+                messageItem.classList.replace('pending', 'error');
+                messageElement.querySelector('.progress-bar-container')?.remove();
+                messageItem.insertAdjacentHTML('beforeend', `<div class="message-footer"><span style="color:var(--error-color);">上传失败</span></div>`);
+            }
+        };
+        xhr.onerror = () => {
+            storage.updateMessage(message.id, { status: 'error' });
+            const messageItem = messageElement.querySelector('.message-item');
+            messageItem.classList.replace('pending', 'error');
+            messageElement.querySelector('.progress-bar-container')?.remove();
+            messageItem.insertAdjacentHTML('beforeend', `<div class="message-footer"><span style="color:var(--error-color);">网络错误</span></div>`);
+        };
+        xhr.send(formData);
+    };
+
+    // --- Event Listeners ---
+    imageBtn.addEventListener('click', () => imagePicker.click());
+    fileBtn.addEventListener('click', () => filePicker.click());
+    imagePicker.addEventListener('change', (e) => handleFiles(e.target.files));
+    filePicker.addEventListener('change', (e) => handleFiles(e.target.files));
+    sendBtn.addEventListener('click', handleSendText);
+    textInput.addEventListener('input', () => {
+        textInput.style.height = 'auto';
+        textInput.style.height = textInput.scrollHeight + 'px';
+        sendBtn.classList.toggle('active', textInput.value.trim().length > 0);
+    });
+    attachmentBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        attachmentPopover.style.display = attachmentPopover.style.display === 'block' ? 'none' : 'block';
+    });
+    menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdownMenu.style.display = dropdownMenu.style.display === 'block' ? 'none' : 'block';
+    });
+    clearRecordsBtn.addEventListener('click', () => {
+        if (confirm('确定要清空所有本地消息记录吗？此操作不可恢复。')) {
+            storage.clearAll();
+            messageList.innerHTML = '';
+        }
+        dropdownMenu.style.display = 'none';
+    });
+    document.addEventListener('click', () => {
+        attachmentPopover.style.display = 'none';
+        dropdownMenu.style.display = 'none';
+    });
+    messageList.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('withdraw-btn')) {
+            const btn = e.target;
+            const id = btn.dataset.id;
+            const path = btn.dataset.path;
+            btn.disabled = true;
+            btn.textContent = '撤回中...';
+            try {
+                const response = await fetch('/delete', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath: path })
+                });
+                if (response.ok) {
+                    storage.removeMessage(id);
+                    document.getElementById(id)?.remove();
+                } else { throw new Error(await response.text()); }
+            } catch (error) {
+                console.error('Withdraw failed:', error);
+                if (confirm(`撤回失败！\n服务器可能已不存在该文件。\n\n是否仅从本地删除此条记录？`)) {
+                    storage.removeMessage(id);
+                    document.getElementById(id)?.remove();
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = '撤回';
+                }
+            }
+        }
+    });
+    
+    // --- Initial Load ---
+    loadMessages();
+});
+</script>
+
+</body>
+</html>
