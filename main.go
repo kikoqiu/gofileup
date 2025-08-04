@@ -9,6 +9,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/gif"
+	_ "image/png"
 	"io"
 	"log"
 	"math/big"
@@ -20,14 +24,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	_ "embed"
+
+	"github.com/nfnt/resize"
 )
 
 //go:embed index.html
 var indexHTML []byte
 
 //go:embed README.md
-var readmeContent []byte // Embed the README.md file content
+var readmeContent []byte
 
 type Config struct {
 	Bind      string `json:"bind"`
@@ -40,6 +47,7 @@ type Config struct {
 }
 
 type contextKey string
+
 const userContextKey = contextKey("username")
 
 type MessageRecord struct {
@@ -55,6 +63,8 @@ var config Config
 var users = make(map[string]string)
 var historyMutex = &sync.Mutex{}
 const defaultConfigPath = "config.json"
+const thumbWidth uint = 400
+const wwwDir = "www"
 
 // --- History Management Core ---
 func modifyHistory(username string, modifier func(records []MessageRecord) []MessageRecord) error {
@@ -76,10 +86,10 @@ func modifyHistory(username string, modifier func(records []MessageRecord) []Mes
 	}
 
 	updatedRecords := modifier(records)
-	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
+	thirtyDaysAgo := time.Now().Add(-30 * 24 * time.Hour).UnixMilli()
 	recentRecords := make([]MessageRecord, 0)
 	for _, rec := range updatedRecords {
-		if rec.Timestamp >= sevenDaysAgo {
+		if rec.Timestamp >= thirtyDaysAgo {
 			recentRecords = append(recentRecords, rec)
 		}
 	}
@@ -99,11 +109,11 @@ func addRecordToHistory(username string, newRecord MessageRecord) error {
 	})
 }
 
-func removeRecordFromHistory(username, filePathToRemove string) error {
+func removeRecordFromHistory(username, relativePathToRemove string) error {
 	return modifyHistory(username, func(records []MessageRecord) []MessageRecord {
 		var newRecords []MessageRecord
 		for _, rec := range records {
-			if rec.FilePath != filePathToRemove {
+			if rec.FilePath != relativePathToRemove {
 				newRecords = append(newRecords, rec)
 			}
 		}
@@ -111,7 +121,27 @@ func removeRecordFromHistory(username, filePathToRemove string) error {
 	})
 }
 
+// --- Security Helper Function ---
+func resolveAndCheckPath(username, requestPath string) (string, error) {
+	userDir := filepath.Join(config.DataDir, username)
+	cleanRequestPath := filepath.Clean(filepath.FromSlash(requestPath))
+	var fullPath string
+
+	if strings.HasPrefix(filepath.ToSlash(cleanRequestPath), filepath.ToSlash(config.DataDir)) {
+		fullPath = cleanRequestPath
+	} else {
+		fullPath = filepath.Join(userDir, cleanRequestPath)
+	}
+
+	if !strings.HasPrefix(filepath.ToSlash(fullPath), filepath.ToSlash(userDir)) {
+		log.Printf("SECURITY: Permission denied. User '%s' attempted to access forbidden path '%s'", username, requestPath)
+		return "", fmt.Errorf("forbidden: access to this path is not allowed")
+	}
+	return fullPath, nil
+}
+
 // --- HTTP Handlers ---
+
 func basicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
@@ -130,15 +160,6 @@ func basicAuth(next http.Handler) http.Handler {
 	})
 }
 
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
-}
-
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -153,7 +174,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	isText := r.FormValue("isText") == "true"
 	textContent := r.FormValue("textContent")
 
-	r.ParseMultipartForm(1 << 30) // Limit upload size to 1GB
+	r.ParseMultipartForm(1 << 30)
 	file, handler, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Invalid file", http.StatusBadRequest)
@@ -161,20 +182,25 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	dateDir := time.Now().Format("2006-01-02")
+	now := time.Now()
+	weekday := now.Weekday()
+	daysToSubtract := (int(weekday) - int(time.Monday) + 7) % 7
+	firstDayOfWeek := now.AddDate(0, 0, -daysToSubtract)
+	weekDir := firstDayOfWeek.Format("2006-01-02")
+
 	userUploadPath := filepath.Join(config.DataDir, username)
 	if err := os.MkdirAll(userUploadPath, 0755); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	uploadPath := filepath.Join(userUploadPath, dateDir)
-	if err := os.MkdirAll(uploadPath, 0755); err != nil {
+	weeklyUploadPath := filepath.Join(userUploadPath, weekDir)
+	if err := os.MkdirAll(weeklyUploadPath, 0755); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	safeFilename := filepath.Base(handler.Filename)
-	destPath := filepath.Join(uploadPath, safeFilename)
+	destPath := filepath.Join(weeklyUploadPath, safeFilename)
 	log.Printf("User '%s' received file: %s, saving to: %s", username, handler.Filename, destPath)
 
 	destFile, err := os.Create(destPath)
@@ -190,8 +216,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	relativePath := filepath.Join(weekDir, safeFilename)
+
 	newRecord := MessageRecord{
-		FilePath:  filepath.ToSlash(destPath),
+		FilePath:  filepath.ToSlash(relativePath),
 		FileName:  safeFilename,
 		IsText:    isText,
 		Content:   textContent,
@@ -226,23 +254,39 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cleanPath := filepath.FromSlash(filepath.Clean(payload.FilePath))
-	parts := strings.Split(cleanPath, string(os.PathSeparator))
-	if len(parts) < 3 || parts[0] != config.DataDir || parts[1] != username {
-		log.Printf("Permission denied: User '%s' attempted to delete path '%s'", username, payload.FilePath)
+	safeFullPath, err := resolveAndCheckPath(username, payload.FilePath)
+	if err != nil {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
-	err := os.Remove(cleanPath)
+	err = os.Remove(safeFullPath)
 	if err != nil && !os.IsNotExist(err) {
-		log.Printf("Error deleting file %s: %v", cleanPath, err)
+		log.Printf("Error deleting file %s: %v", safeFullPath, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("User '%s' successfully deleted file: %s", username, cleanPath)
+	log.Printf("User '%s' successfully deleted file: %s", username, safeFullPath)
 
-	if err := removeRecordFromHistory(username, payload.FilePath); err != nil {
+	thumbFilename := filepath.Base(safeFullPath) + ".jpg"
+	thumbPath := filepath.Join(filepath.Dir(safeFullPath), "thumb", thumbFilename)
+	err = os.Remove(thumbPath)
+	if err != nil && !os.IsNotExist(err) {
+		log.Printf("WARN: Could not delete thumbnail %s: %v", thumbPath, err)
+	} else if err == nil {
+		log.Printf("Successfully deleted thumbnail: %s", thumbPath)
+	}
+
+	var relativePathToRemove string
+	cleanRequestPath := filepath.Clean(filepath.FromSlash(payload.FilePath))
+	if strings.HasPrefix(cleanRequestPath, config.DataDir) {
+		userDir := filepath.Join(config.DataDir, username)
+		relativePathToRemove = strings.TrimPrefix(safeFullPath, userDir+string(os.PathSeparator))
+	} else {
+		relativePathToRemove = cleanRequestPath
+	}
+
+	if err := removeRecordFromHistory(username, filepath.ToSlash(relativePathToRemove)); err != nil {
 		log.Printf("WARN: File at %s deleted, but failed to update history for user '%s': %v", payload.FilePath, username, err)
 	}
 	w.WriteHeader(http.StatusOK)
@@ -276,18 +320,109 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad Request: 'path' parameter is missing", http.StatusBadRequest)
 		return
 	}
-	cleanPath := filepath.FromSlash(filepath.Clean(filePath))
-	expectedPrefix := filepath.Join(config.DataDir, username)
-	if !strings.HasPrefix(cleanPath, expectedPrefix) {
-		log.Printf("Permission denied: User '%s' attempted to download path '%s'", username, filePath)
+
+	safeFullPath, err := resolveAndCheckPath(username, filePath)
+	if err != nil {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(cleanPath)+"\"")
-	http.ServeFile(w, r, cleanPath)
+
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(safeFullPath)+"\"")
+	http.ServeFile(w, r, safeFullPath)
+}
+
+func previewHandler(w http.ResponseWriter, r *http.Request) {
+	username, ok := r.Context().Value(userContextKey).(string)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	filePath := strings.TrimPrefix(r.URL.Path, "/preview/")
+	if filePath == "" {
+		http.Error(w, "Bad Request: file path is missing", http.StatusBadRequest)
+		return
+	}
+
+	originalPath, err := resolveAndCheckPath(username, filePath)
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	thumbDir := filepath.Join(filepath.Dir(originalPath), "thumb")
+	thumbFilename := filepath.Base(originalPath) + ".jpg"
+	thumbPath := filepath.Join(thumbDir, thumbFilename)
+
+	originalInfo, err := os.Stat(originalPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	thumbInfo, err := os.Stat(thumbPath)
+
+	if os.IsNotExist(err) || thumbInfo.ModTime().Before(originalInfo.ModTime()) {
+		log.Printf("Generating thumbnail for %s", originalPath)
+
+		file, err := os.Open(originalPath)
+		if err != nil {
+			log.Printf("ERROR: Could not open original file for thumbnailing: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		img, _, err := image.Decode(file)
+		if err != nil {
+			log.Printf("ERROR: Could not decode image for thumbnailing: %v", err)
+			http.Error(w, "Bad Request: Not a valid image", http.StatusBadRequest)
+			return
+		}
+
+		m := resize.Resize(thumbWidth, 0, img, resize.Lanczos3)
+
+		if err := os.MkdirAll(thumbDir, 0755); err != nil {
+			log.Printf("ERROR: Could not create thumb directory: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		out, err := os.Create(thumbPath)
+		if err != nil {
+			log.Printf("ERROR: Could not create thumb file: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		defer out.Close()
+
+		options := &jpeg.Options{Quality: 85}
+		if err := jpeg.Encode(out, m, options); err != nil {
+			log.Printf("ERROR: Could not encode thumb file as JPEG: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	http.ServeFile(w, r, thumbPath)
 }
 
 // --- Setup and Helper Functions ---
+func releaseStaticFiles() {
+	indexPath := filepath.Join(wwwDir, "index.html")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		log.Printf("Static file '%s' not found, creating from embedded content...", indexPath)
+		if err := os.MkdirAll(wwwDir, 0755); err != nil {
+			log.Fatalf("FATAL: Failed to create www directory: %v", err)
+		}
+		if err := os.WriteFile(indexPath, indexHTML, 0644); err != nil {
+			log.Fatalf("FATAL: Failed to write index.html: %v", err)
+		}
+		log.Printf("Successfully created '%s'", indexPath)
+	} else {
+		log.Printf("Static file '%s' already exists, skipping creation.", indexPath)
+	}
+}
+
 func generateReadmeIfNeeded() {
 	readmePath := "README.md"
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
@@ -396,6 +531,7 @@ func main() {
 	loadConfig()
 	loadUsers()
 	generateReadmeIfNeeded()
+	releaseStaticFiles()
 
 	if config.VisitLog != "" {
 		logFile, err := os.OpenFile(config.VisitLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -407,11 +543,15 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", rootHandler)
+
+	fileServer := http.FileServer(http.Dir(wwwDir))
+	mux.Handle("/", fileServer)
+
 	mux.HandleFunc("/upload", uploadHandler)
 	mux.HandleFunc("/delete", deleteHandler)
 	mux.HandleFunc("/history", historyHandler)
 	mux.HandleFunc("/download", downloadHandler)
+	mux.HandleFunc("/preview/", previewHandler)
 
 	authHandler := basicAuth(mux)
 

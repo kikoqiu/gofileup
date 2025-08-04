@@ -6,6 +6,8 @@
     <title>File Transfer</title>
     <style>
         :root {
+            /* MODIFIED: Added a CSS variable for thumbnail width */
+            --thumbnail-width: 250px;
             --bg-color: #121212; --text-color: #e0e0e0; --primary-color: #007aff;
             --success-color: #34c759; --error-color: #ff3b30; --input-bg: #1c1c1e;
             --border-color: #2c2c2d; --bubble-bg: #2c2c2e; --bubble-self-bg: #007aff;
@@ -29,6 +31,7 @@
         .message-item { max-width: 100%; padding: 10px 15px; border-radius: 18px; background-color: var(--bubble-bg); word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
         .message-wrapper.self .message-item { background-color: var(--bubble-self-bg); color: white; }
         .message-content .filename { font-weight: bold; margin-bottom: 2px; }
+        .message-content .thumbnail-container { margin-bottom: 8px; }
         .message-content .text-content { white-space: pre-wrap; }
         .filesize { font-size: 0.8em; color: rgba(255,255,255,0.6); margin-top: 4px; }
         .message-wrapper.self .filesize { color: rgba(255,255,255,0.8); }
@@ -58,9 +61,42 @@
         .popover-item:hover { background-color: #3a3a3c; }
         .popover-item svg { width: 24px; height: 24px; fill: var(--text-color); margin-right: 15px; }
         input[type="file"] { display: none; }
+
+        /* MODIFIED: Fixed width bug using CSS variable */
+        .thumbnail-container {
+            width: var(--thumbnail-width);
+            max-width: 100%; /* Safeguard for small screens */
+            cursor: pointer;
+            border-radius: 12px;
+            overflow: hidden;
+            line-height: 0;
+        }
+        .thumbnail-container img { width: 100%; height: auto; display: block; }
+        
+        #image-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.85); z-index: 1000;
+            align-items: center; justify-content: center; cursor: pointer;
+        }
+        #image-overlay img { max-width: 95%; max-height: 95%; object-fit: contain; border-radius: 8px; }
+
+        @keyframes shimmer {
+            0% { background-position: -500px 0; }
+            100% { background-position: 500px 0; }
+        }
+        .thumbnail-placeholder {
+            width: 100%; /* Takes width from .thumbnail-container now */
+            aspect-ratio: 4 / 3;
+            border-radius: 12px;
+            background-color: #1c1c1e;
+            background-image: linear-gradient(90deg, #1c1c1e 0px, #2c2c2d 40px, #1c1c1e 80px);
+            background-size: 600px;
+            animation: shimmer 1.5s infinite linear;
+        }
     </style>
 </head>
 <body>
+<!-- HTML Body remains unchanged -->
 <div id="app-container">
     <div id="header">
         <h1 data-i18n="headerTitle">File Transfer</h1>
@@ -102,6 +138,10 @@
 <input type="file" id="image-picker" accept="image/*" multiple>
 <input type="file" id="file-picker" multiple>
 
+<div id="image-overlay">
+    <img id="fullscreen-image" src="" alt="Fullscreen Image Preview">
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // --- i18n Setup ---
@@ -137,10 +177,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropdownMenu = document.getElementById('dropdown-menu');
     const clearRecordsBtn = document.getElementById('clear-records-btn');
     const refreshBtn = document.getElementById('refresh-btn');
+    const imageOverlay = document.getElementById('image-overlay');
+    const fullscreenImage = document.getElementById('fullscreen-image');
 
     const STORAGE_KEY = 'mobile-upload-messages';
-    
+    let saveTimeout = null;
+
     // --- Storage Management ---
+    const saveMessagesNow = (messages) => {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+        } catch (e) {
+            console.error("Failed to save messages immediately:", e);
+        }
+    };
+
+    const scheduleSave = (messages) => {
+        clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => saveMessagesNow(messages), 5000);
+    };
+
     const storage = {
         getMessages: () => {
             const now = Date.now();
@@ -148,19 +204,42 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
                 const recentMessages = messages.filter(m => m.timestamp > thirtyDaysAgo);
-                if (messages.length !== recentMessages.length) storage.saveMessages(recentMessages);
+                if (messages.length !== recentMessages.length) {
+                    saveMessagesNow(recentMessages);
+                }
                 return recentMessages;
             } catch (e) { return []; }
         },
-        saveMessages: (messages) => localStorage.setItem(STORAGE_KEY, JSON.stringify(messages)),
-        addMessage: (message) => { const msgs = storage.getMessages(); msgs.push(message); storage.saveMessages(msgs); },
+        addMessage: (message) => { 
+            const msgs = storage.getMessages(); 
+            msgs.push(message); 
+            saveMessagesNow(msgs); 
+        },
         updateMessage: (id, updates) => {
             const msgs = storage.getMessages();
             const index = msgs.findIndex(m => m.id === id);
-            if (index !== -1) { msgs[index] = { ...msgs[index], ...updates }; storage.saveMessages(msgs); }
+            if (index !== -1) { 
+                msgs[index] = { ...msgs[index], ...updates }; 
+                saveMessagesNow(msgs); 
+            }
         },
-        removeMessage: (id) => { let msgs = storage.getMessages(); msgs = msgs.filter(m => m.id !== id); storage.saveMessages(msgs); },
-        clearAll: () => localStorage.removeItem(STORAGE_KEY),
+        removeMessage: (id) => { 
+            let msgs = storage.getMessages(); 
+            msgs = msgs.filter(m => m.id !== id); 
+            saveMessagesNow(msgs);
+        },
+        clearAll: () => {
+            clearTimeout(saveTimeout);
+            localStorage.removeItem(STORAGE_KEY);
+        },
+        updateMessageDimensions: (id, { width, height }) => {
+            const msgs = storage.getMessages();
+            const index = msgs.findIndex(m => m.id === id);
+            if (index !== -1) {
+                msgs[index] = { ...msgs[index], width, height };
+                scheduleSave(msgs);
+            }
+        }
     };
 
     // --- Utils ---
@@ -185,16 +264,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- UI Rendering ---
     const renderMessage = (msg) => {
         const isSelf = msg.direction !== 'in';
-        const msgContent = msg.isText ? msg.content : (msg.fileName || msg.content);
+        const isImage = msg.isImage || (msg.fileName && /\.(jpe?g|png|gif|webp)$/i.test(msg.fileName));
         let contentHtml;
-        if (msg.isText) {
+
+        if (isImage && msg.status === 'success' && msg.filePath) {
+            const previewUrl = `/preview/${msg.filePath}`; 
+            const sizeHtml = msg.size ? `<div class="filesize">${formatBytes(msg.size)}</div>` : '';
+            let placeholderStyle = '';
+            if (msg.width && msg.height) {
+                placeholderStyle = `style="aspect-ratio: ${msg.width} / ${msg.height}"`;
+            }
+            contentHtml = `
+                <div class="thumbnail-container" data-src="${previewUrl}">
+                    <div class="thumbnail-placeholder" ${placeholderStyle}></div>
+                </div>
+                <div class="filename">${escapeHTML(msg.fileName)}</div>
+                ${sizeHtml}`;
+        } else if (msg.isText) {
             let textToDisplay = msg.content;
             if (textToDisplay.split('\n').length > 8 || textToDisplay.length > 100) { textToDisplay = textToDisplay.substring(0, 100) + '...'; }
             contentHtml = `<div class="text-content">${escapeHTML(textToDisplay).replace(/\n/g, '<br>')}</div>`;
         } else {
             const sizeHtml = msg.size ? `<div class="filesize">${formatBytes(msg.size)}</div>` : '';
-            contentHtml = `<div class="filename">${escapeHTML(msgContent)}</div>${sizeHtml}`;
+            contentHtml = `<div class="filename">${escapeHTML(msg.fileName || msg.content)}</div>${sizeHtml}`;
         }
+        
         let footerHtml = '';
         if (msg.status === 'success') {
             const timeStr = formatTimestamp(msg.timestamp);
@@ -202,15 +296,55 @@ document.addEventListener('DOMContentLoaded', () => {
             const withdrawBtn = `<button class="footer-btn withdraw-btn" data-id="${msg.id}" data-path="${msg.filePath}" title="${t('withdraw')}">${t('withdraw')}</button>`;
             footerHtml = `<div class="message-footer"><span class="footer-timestamp">${timeStr}</span>${downloadBtn}${withdrawBtn}</div>`;
         }
+
         const progressHtml = msg.status === 'pending' ? `<div class="status-text">${t('uploading')} 0%</div><div class="progress-bar-container"><div class="progress-bar"></div></div>` : '';
         const errorHtml = msg.status === 'error' ? `<div class="message-footer"><span style="color:var(--error-color);">${t('uploadFailed')}</span></div>` : '';
-        const messageHtml = `<div class="message-wrapper ${isSelf ? 'self' : ''}" id="${msg.id}"><div class="message-item ${msg.status || 'success'}"><div class="message-content">${contentHtml}</div>${progressHtml}${footerHtml}${errorHtml}</div></div>`;
+        
+        const messageHtml = `<div class="message-wrapper ${isSelf ? 'self' : ''}" id="${msg.id}">
+            <div class="message-item ${msg.status || 'success'}">
+                <div class="message-content">${contentHtml}</div>
+                ${progressHtml}${footerHtml}${errorHtml}
+            </div>
+        </div>`;
         messageList.insertAdjacentHTML('afterbegin', messageHtml);
     };
 
+    const lazyLoadObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const container = entry.target;
+                const imageUrl = container.dataset.src;
+                
+                const image = new Image();
+                image.src = imageUrl;
+                image.alt = "Image preview";
+                image.onload = () => {
+                    container.innerHTML = '';
+                    container.appendChild(image);
+
+                    const wrapper = container.closest('.message-wrapper');
+                    if (wrapper) {
+                        const msgId = wrapper.id;
+                        const msg = storage.getMessages().find(m => m.id === msgId);
+                        if (msg && (msg.width !== image.naturalWidth || msg.height !== image.naturalHeight)) {
+                           storage.updateMessageDimensions(msgId, { width: image.naturalWidth, height: image.naturalHeight });
+                        }
+                    }
+                };
+                
+                observer.unobserve(container);
+            }
+        });
+    }, { root: messageList, rootMargin: "0px 0px 200px 0px" });
+
     const reRenderAllMessages = () => {
+        lazyLoadObserver.disconnect();
         messageList.innerHTML = '';
         storage.getMessages().sort((a, b) => a.timestamp - b.timestamp).forEach(renderMessage);
+        
+        const placeholders = document.querySelectorAll('.thumbnail-container[data-src]');
+        placeholders.forEach(ph => lazyLoadObserver.observe(ph));
+        
         scrollToBottom();
     };
 
@@ -223,11 +357,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const serverFilePaths = new Set(serverHistory.map(m => m.filePath));
             let uiNeedsUpdate = false;
 
-            // Sync Deletions: Use a 6-day window for safety against clock skew.
-            const sixDaysAgo = Date.now() - 6 * 24 * 60 * 60 * 1000;
+            const daysAgo = Date.now() - 29 * 24 * 60 * 60 * 1000;
             const messagesToDelete = [];
             localMessages.forEach(localMsg => {
-                if (localMsg.status === 'success' && localMsg.filePath && localMsg.timestamp > sixDaysAgo && !serverFilePaths.has(localMsg.filePath)) {
+                if (localMsg.status === 'success' && localMsg.filePath && localMsg.timestamp > daysAgo && !serverFilePaths.has(localMsg.filePath)) {
                     messagesToDelete.push(localMsg.id);
                 }
             });
@@ -243,6 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     storage.addMessage({
                         id: `msg-server-${serverMsg.timestamp}`, content: serverMsg.isText ? serverMsg.content : serverMsg.fileName,
                         fileName: serverMsg.fileName, size: serverMsg.size, isText: serverMsg.isText, status: 'success',
+                        isImage: /\.(jpe?g|png|gif|webp)$/i.test(serverMsg.fileName),
                         timestamp: serverMsg.timestamp, filePath: serverMsg.filePath, direction: 'in'
                     });
                     uiNeedsUpdate = true;
@@ -268,12 +402,16 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const uploadFile = (file, originalTextContent = null) => {
         const isText = originalTextContent !== null;
+        const isImage = !isText && file.type.startsWith('image/');
+
         const message = {
             id: `msg-local-${Date.now()}-${Math.random()}`, content: isText ? originalTextContent : file.name,
-            fileName: file.name, size: file.size, isText: isText, status: 'pending', direction: 'out',
+            fileName: file.name, size: file.size, isText: isText, 
+            isImage: isImage, status: 'pending', direction: 'out',
             timestamp: Date.now(), filePath: null
         };
-        storage.addMessage(message); reRenderAllMessages();
+        storage.addMessage(message);
+        reRenderAllMessages();
         const msgEl = document.getElementById(message.id);
         const bar = msgEl?.querySelector('.progress-bar');
         const stat = msgEl?.querySelector('.status-text');
@@ -295,7 +433,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             reRenderAllMessages();
         };
-        xhr.onerror = () => { storage.updateMessage(message.id, { status: 'error' }); reRenderAllMessages(); };
+        xhr.onerror = () => { 
+            storage.updateMessage(message.id, { status: 'error' });
+            reRenderAllMessages(); 
+        };
         xhr.send(formData);
     };
 
@@ -310,8 +451,22 @@ document.addEventListener('DOMContentLoaded', () => {
     attachmentBtn.addEventListener('click', (e) => { e.stopPropagation(); attachmentPopover.style.display = attachmentPopover.style.display === 'block' ? 'none' : 'block'; });
     menuBtn.addEventListener('click', (e) => { e.stopPropagation(); dropdownMenu.style.display = dropdownMenu.style.display === 'block' ? 'none' : 'block'; });
     clearRecordsBtn.addEventListener('click', () => { if (confirm(t('confirmClearRecords'))) { storage.clearAll(); reRenderAllMessages(); } dropdownMenu.style.display = 'none'; });
+    
+    imageOverlay.addEventListener('click', () => {
+        imageOverlay.style.display = 'none';
+        fullscreenImage.src = ''; 
+    });
+    
     document.addEventListener('click', () => { attachmentPopover.style.display = 'none'; dropdownMenu.style.display = 'none'; });
+    
     messageList.addEventListener('click', async (e) => {
+        const thumbnail = e.target.closest('.thumbnail-container img');
+        if (thumbnail) {
+            fullscreenImage.src = thumbnail.src; 
+            imageOverlay.style.display = 'flex';
+            return;
+        }
+        
         const target = e.target.closest('button.footer-btn'); if (!target) return;
         const id = target.dataset.id, path = target.dataset.path;
         if (target.classList.contains('download-btn')) { window.location.href = `/download?path=${encodeURIComponent(path)}`; }
@@ -327,7 +482,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 console.error('Withdraw failed:', error);
                 if (confirm(t('withdrawFailed') + "\n\n" + t('confirmLocalDelete'))) {
-                    storage.removeMessage(id); document.getElementById(id)?.remove();
+                    storage.removeMessage(id);
+                    document.getElementById(id)?.remove();
                 } else { target.disabled = false; target.textContent = t('withdraw'); }
             }
         }
