@@ -575,12 +575,23 @@ document.addEventListener('DOMContentLoaded', () => {
     messageList.addEventListener('click', async (e) => {
         const thumbnail = e.target.closest('.thumbnail-container img');
         if (thumbnail) {
-            fullscreenImage.src = thumbnail.dataset.fullscreenUrl;
+            fullscreenImage.src = thumbnail.dataset.fullscreenUrl; 
             imageOverlay.style.display = 'flex';
             return;
         }
-        const target = e.target.closest('button.footer-btn'); if (!target) return;
-       const id = target.dataset.id, path = target.dataset.path;
+        const target = e.target.closest('button.footer-btn');        
+        // NEW: Handle click on "Upload Failed" message to remove it.
+        const errorFooter = e.target.closest('.message-footer');
+        if (errorFooter && errorFooter.querySelector('[style*="var(--error-color)"]')) {
+            const wrapper = e.target.closest('.message-wrapper');
+            if (wrapper) {
+                storage.removeMessage(wrapper.id);
+                wrapper.remove();
+            }
+            return; // Stop further processing
+        }
+        if (!target) return;
+        const id = target.dataset.id, path = target.dataset.path;
         if (target.classList.contains('download-btn')) { 
             window.location.href = `/download?path=${encodeURIComponent(path)}`; 
         }
@@ -588,7 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
             target.disabled = true; target.textContent = t('withdrawing');
             try {
                 await apiFetch('/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filePath: path }) });
-               const localMessage = storage.getMessages().find(m => m.id === id);
+                const localMessage = storage.getMessages().find(m => m.id === id);
                 if(localMessage) storage.removeMessage(id);
                 document.getElementById(id)?.remove();
             } catch (error) {
