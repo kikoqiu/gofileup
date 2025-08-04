@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -36,6 +37,7 @@ var indexHTML []byte
 //go:embed README.md
 var readmeContent []byte
 
+// --- Global Configuration and Constants ---
 type Config struct {
 	Bind      string `json:"bind"`
 	TLS       bool   `json:"tls"`
@@ -59,12 +61,156 @@ type MessageRecord struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-var config Config
-var users = make(map[string]string)
-var historyMutex = &sync.Mutex{}
-const defaultConfigPath = "config.json"
-const thumbWidth uint = 400
-const wwwDir = "www"
+var (
+	config        Config
+	users         = make(map[string]string)
+	historyMutex  = &sync.Mutex{}
+	sm            *SessionManager
+)
+
+const (
+	defaultConfigPath = "config.json"
+	thumbWidth        = 400
+	wwwDir            = "www"
+	sessionCookieName = "session_id"
+	sessionDuration   = 30 * 24 * time.Hour
+)
+
+// --- Session Management ---
+
+type SessionData struct {
+	Username   string    `json:"username"`
+	LastAccess time.Time `json:"lastAccess"`
+}
+
+type SessionManager struct {
+	sessions   map[string]SessionData
+	mutex      sync.RWMutex
+	isDirty    bool
+	filePath   string
+}
+
+func NewSessionManager(filePath string) *SessionManager {
+	manager := &SessionManager{
+		sessions: make(map[string]SessionData),
+		filePath: filePath,
+	}
+	manager.loadSessions()
+	return manager
+}
+
+func (sm *SessionManager) loadSessions() {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+
+	content, err := os.ReadFile(sm.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Println("Session file not found, starting with empty session map.")
+			return
+		}
+		log.Printf("WARN: Failed to read session file: %v. Starting with empty session map.", err)
+		return
+	}
+
+	if err := json.Unmarshal(content, &sm.sessions); err != nil {
+		log.Printf("WARN: Failed to unmarshal session file: %v. Starting with empty session map.", err)
+		sm.sessions = make(map[string]SessionData)
+	}
+	log.Printf("Successfully loaded %d sessions.", len(sm.sessions))
+}
+
+func (sm *SessionManager) saveSessions() {
+	sm.mutex.RLock()
+
+	if !sm.isDirty {
+		sm.mutex.RUnlock()
+		return
+	}
+	log.Println("Saving updated sessions to disk...")
+	content, err := json.MarshalIndent(sm.sessions, "", "  ")
+	sm.mutex.RUnlock() // Unlock before I/O operation
+
+	if err != nil {
+		log.Printf("ERROR: Failed to marshal sessions: %v", err)
+		return
+	}
+	if err := os.WriteFile(sm.filePath, content, 0600); err != nil {
+		log.Printf("ERROR: Failed to write session file: %v", err)
+	}
+	
+	sm.mutex.Lock()
+	sm.isDirty = false
+	sm.mutex.Unlock()
+}
+
+func (sm *SessionManager) CreateSession(username string) (string, error) {
+	sessionID, err := generateRandomString(32)
+	if err != nil {
+		return "", err
+	}
+	
+	sm.mutex.Lock()
+	sm.sessions[sessionID] = SessionData{
+		Username:   username,
+		LastAccess: truncateToDay(time.Now()),
+	}
+	sm.isDirty = true
+	sm.mutex.Unlock()
+	
+	sm.saveSessions()
+	return sessionID, nil
+}
+
+func (sm *SessionManager) ValidateSession(sessionID string) (*SessionData, error) {
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session not found")
+	}
+	if time.Since(session.LastAccess) > sessionDuration {
+		return nil, fmt.Errorf("session expired")
+	}
+	return &session, nil
+}
+
+func (sm *SessionManager) DeleteSession(sessionID string) {
+	sm.mutex.Lock()
+	if _, ok := sm.sessions[sessionID]; ok {
+		delete(sm.sessions, sessionID)
+		sm.isDirty = true
+	}
+	sm.mutex.Unlock()
+
+	sm.saveSessions()
+}
+
+func (sm *SessionManager) UpdateAndCleanSessions(currentSessionID string) {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+
+	today := truncateToDay(time.Now())
+	
+	if data, ok := sm.sessions[currentSessionID]; ok {
+		if data.LastAccess.Before(today) {
+			data.LastAccess = today
+			sm.sessions[currentSessionID] = data
+			sm.isDirty = true
+			log.Printf("Session for user '%s' updated to new day.", data.Username)
+		}
+	}
+
+	for id, data := range sm.sessions {
+		if time.Since(data.LastAccess) > sessionDuration {
+			delete(sm.sessions, id)
+			sm.isDirty = true
+			log.Printf("Cleaned up expired session for user '%s'", data.Username)
+		}
+	}
+}
+
 
 // --- History Management Core ---
 func modifyHistory(username string, modifier func(records []MessageRecord) []MessageRecord) error {
@@ -86,7 +232,7 @@ func modifyHistory(username string, modifier func(records []MessageRecord) []Mes
 	}
 
 	updatedRecords := modifier(records)
-	thirtyDaysAgo := time.Now().Add(-30 * 24 * time.Hour).UnixMilli()
+	thirtyDaysAgo := time.Now().Add(-sessionDuration).UnixMilli()
 	recentRecords := make([]MessageRecord, 0)
 	for _, rec := range updatedRecords {
 		if rec.Timestamp >= thirtyDaysAgo {
@@ -142,29 +288,114 @@ func resolveAndCheckPath(username, requestPath string) (string, error) {
 
 // --- HTTP Handlers ---
 
-func basicAuth(next http.Handler) http.Handler {
+func sessionAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, pass, ok := r.BasicAuth()
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"Unauthorized: Please log in."}`, http.StatusUnauthorized)
 			return
 		}
-		if storedPass, userOk := users[user]; userOk && storedPass == pass {
-			ctx := context.WithValue(r.Context(), userContextKey, user)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		} else {
-			log.Printf("Authentication failed: incorrect username or password for user=%s, from=%s", user, r.RemoteAddr)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		sessionID := cookie.Value
+
+		sessionData, err := sm.ValidateSession(sessionID)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"Unauthorized: Invalid session. Please log in again."}`, http.StatusUnauthorized)
+			return
 		}
+
+		ctx := context.WithValue(r.Context(), userContextKey, sessionData.Username)
+		
+		next.ServeHTTP(w, r.WithContext(ctx))
+
+		sm.UpdateAndCleanSessions(sessionID)
+		sm.saveSessions() 
+
+		newCookie := http.Cookie{
+			Name:     sessionCookieName,
+			Value:    sessionID,
+			Path:     "/",
+			Expires:  time.Now().Add(sessionDuration),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   config.TLS,
+		}
+		http.SetCookie(w, &newCookie)
 	})
 }
 
-func uploadHandler(w http.ResponseWriter, r *http.Request) {
+func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, `{"error":"Invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	storedPass, userOk := users[creds.Username]
+	if !userOk || storedPass != creds.Password {
+		log.Printf("Login failed for user=%s from=%s", creds.Username, r.RemoteAddr)
+		http.Error(w, `{"error":"Invalid username or password"}`, http.StatusUnauthorized)
+		return
+	}
+
+	sessionID, err := sm.CreateSession(creds.Username)
+	if err != nil {
+		http.Error(w, `{"error":"Internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    sessionID,
+		Path:     "/",
+		Expires:  time.Now().Add(sessionDuration),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   config.TLS,
+	})
+
+	log.Printf("Login successful for user=%s from=%s", creds.Username, r.RemoteAddr)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err == nil {
+		sm.DeleteSession(cookie.Value)
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   config.TLS,
+		MaxAge:   -1,
+	})
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "logged out"})
+}
+
+
+func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	username, ok := r.Context().Value(userContextKey).(string)
 	if !ok {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -237,10 +468,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	username, ok := r.Context().Value(userContextKey).(string)
 	if !ok {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -249,21 +476,22 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		FilePath string `json:"filePath"`
 	}
+	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(w, `{"error":"Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 
 	safeFullPath, err := resolveAndCheckPath(username, payload.FilePath)
 	if err != nil {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		http.Error(w, `{"error":"Forbidden"}`, http.StatusForbidden)
 		return
 	}
 
 	err = os.Remove(safeFullPath)
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("Error deleting file %s: %v", safeFullPath, err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, `{"error":"Internal server error"}`, http.StatusInternalServerError)
 		return
 	}
 	log.Printf("User '%s' successfully deleted file: %s", username, safeFullPath)
@@ -296,7 +524,8 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 func historyHandler(w http.ResponseWriter, r *http.Request) {
 	username, ok := r.Context().Value(userContextKey).(string)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"Internal server error"}`, http.StatusInternalServerError)
 		return
 	}
 	historyPath := filepath.Join(config.DataDir, username, "messages.json")
@@ -312,7 +541,8 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	username, ok := r.Context().Value(userContextKey).(string)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"Internal server error"}`, http.StatusInternalServerError)
 		return
 	}
 	filePath := r.URL.Query().Get("path")
@@ -323,7 +553,7 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	safeFullPath, err := resolveAndCheckPath(username, filePath)
 	if err != nil {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		http.Error(w, `{"error":"Forbidden"}`, http.StatusForbidden)
 		return
 	}
 
@@ -334,7 +564,7 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 func previewHandler(w http.ResponseWriter, r *http.Request) {
 	username, ok := r.Context().Value(userContextKey).(string)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -379,7 +609,7 @@ func previewHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		m := resize.Resize(thumbWidth, 0, img, resize.Lanczos3)
+		m := resize.Resize(uint(thumbWidth), 0, img, resize.Lanczos3)
 
 		if err := os.MkdirAll(thumbDir, 0755); err != nil {
 			log.Printf("ERROR: Could not create thumb directory: %v", err)
@@ -407,6 +637,18 @@ func previewHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Setup and Helper Functions ---
+func truncateToDay(t time.Time) time.Time {
+	return t.Truncate(24 * time.Hour)
+}
+
+func generateRandomString(length int) (string, error) {
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
+
 func releaseStaticFiles() {
 	indexPath := filepath.Join(wwwDir, "index.html")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
@@ -532,6 +774,8 @@ func main() {
 	loadUsers()
 	generateReadmeIfNeeded()
 	releaseStaticFiles()
+	
+	sm = NewSessionManager("sessions.json")
 
 	if config.VisitLog != "" {
 		logFile, err := os.OpenFile(config.VisitLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -542,30 +786,41 @@ func main() {
 		log.SetOutput(mw)
 	}
 
-	mux := http.NewServeMux()
+	// API routes that need authentication
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("/upload", uploadHandler)
+	apiMux.HandleFunc("/delete", deleteHandler)
+	apiMux.HandleFunc("/history", historyHandler)
+	apiMux.HandleFunc("/download", downloadHandler)
+	apiMux.HandleFunc("/preview/", previewHandler)
+	apiMux.HandleFunc("/logout", logoutHandler)
+	
+	// Create a handler for all API endpoints, wrapped in the sessionAuth middleware
+	apiHandler := sessionAuth(apiMux)
 
-	fileServer := http.FileServer(http.Dir(wwwDir))
-	mux.Handle("/", fileServer)
-
-	mux.HandleFunc("/upload", uploadHandler)
-	mux.HandleFunc("/delete", deleteHandler)
-	mux.HandleFunc("/history", historyHandler)
-	mux.HandleFunc("/download", downloadHandler)
-	mux.HandleFunc("/preview/", previewHandler)
-
-	authHandler := basicAuth(mux)
+	// Main router
+	mainMux := http.NewServeMux()
+	mainMux.Handle("/", http.FileServer(http.Dir(wwwDir)))
+	mainMux.HandleFunc("/login", loginHandler)
+	// All API paths are routed to the single, wrapped apiHandler
+	mainMux.Handle("/upload", apiHandler)
+	mainMux.Handle("/delete", apiHandler)
+	mainMux.Handle("/history", apiHandler)
+	mainMux.Handle("/download", apiHandler)
+	mainMux.Handle("/preview/", apiHandler)
+	mainMux.Handle("/logout", apiHandler)
 
 	log.Printf("Server starting, listening on %s", config.Bind)
 	if config.TLS {
 		log.Println("TLS is enabled.")
 		checkAndGenerateCerts()
-		err := http.ListenAndServeTLS(config.Bind, config.CertFile, config.KeyFile, authHandler)
+		err := http.ListenAndServeTLS(config.Bind, config.CertFile, config.KeyFile, mainMux)
 		if err != nil {
 			log.Fatalf("Server startup failed: %v", err)
 		}
 	} else {
 		log.Println("TLS is disabled, using plain HTTP.")
-		err := http.ListenAndServe(config.Bind, authHandler)
+		err := http.ListenAndServe(config.Bind, mainMux)
 		if err != nil {
 			log.Fatalf("Server startup failed: %v", err)
 		}

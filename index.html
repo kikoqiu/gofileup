@@ -6,7 +6,6 @@
     <title>File Transfer</title>
     <style>
         :root {
-            /* MODIFIED: Added a CSS variable for thumbnail width */
             --thumbnail-width: 250px;
             --bg-color: #121212; --text-color: #e0e0e0; --primary-color: #007aff;
             --success-color: #34c759; --error-color: #ff3b30; --input-bg: #1c1c1e;
@@ -14,6 +13,22 @@
             --withdraw-color: #ff9500; --download-color: #5856d6; --hover-bg: rgba(255, 255, 255, 0.1);
         }
         html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--bg-color); color: var(--text-color); overflow: hidden; }
+        .hidden { display: none !important; }
+
+        /* Login View Styles */
+        #login-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 20px; box-sizing: border-box; }
+        #login-form { display: flex; flex-direction: column; width: 100%; max-width: 320px; gap: 15px; }
+        #login-form h1 { font-size: 2em; font-weight: 600; text-align: center; margin-bottom: 20px; color: var(--primary-color); }
+        .input-group { display: flex; flex-direction: column; }
+        .input-group label { font-size: 0.9em; margin-bottom: 5px; color: rgba(255,255,255,0.7); }
+        .input-group input { padding: 12px 15px; border: 1px solid var(--border-color); background-color: var(--input-bg); color: var(--text-color); border-radius: 8px; font-size: 16px; outline: none; }
+        .input-group input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.3); }
+        .options-group { display: flex; align-items: center; gap: 8px; }
+        #login-btn { padding: 12px; background-color: var(--primary-color); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        #login-btn:hover { opacity: 0.85; }
+        #login-error { color: var(--error-color); text-align: center; margin-top: 10px; min-height: 1.2em; }
+
+        /* App View Styles */
         #app-container { display: flex; flex-direction: column; height: 100%; }
         #header { padding: 10px 15px; background-color: var(--input-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; position: relative; flex-shrink: 0; }
         #header h1 { font-size: 1.1em; margin: 0; font-weight: 600; }
@@ -61,43 +76,38 @@
         .popover-item:hover { background-color: #3a3a3c; }
         .popover-item svg { width: 24px; height: 24px; fill: var(--text-color); margin-right: 15px; }
         input[type="file"] { display: none; }
-
-        /* MODIFIED: Fixed width bug using CSS variable */
-        .thumbnail-container {
-            width: var(--thumbnail-width);
-            max-width: 100%; /* Safeguard for small screens */
-            cursor: pointer;
-            border-radius: 12px;
-            overflow: hidden;
-            line-height: 0;
-        }
+        .thumbnail-container { width: var(--thumbnail-width); max-width: 100%; cursor: pointer; border-radius: 12px; overflow: hidden; line-height: 0; }
         .thumbnail-container img { width: 100%; height: auto; display: block; }
-        
-        #image-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.85); z-index: 1000;
-            align-items: center; justify-content: center; cursor: pointer;
-        }
+        #image-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.85); z-index: 1000; align-items: center; justify-content: center; cursor: pointer; }
         #image-overlay img { max-width: 95%; max-height: 95%; object-fit: contain; border-radius: 8px; }
-
-        @keyframes shimmer {
-            0% { background-position: -500px 0; }
-            100% { background-position: 500px 0; }
-        }
-        .thumbnail-placeholder {
-            width: 100%; /* Takes width from .thumbnail-container now */
-            aspect-ratio: 4 / 3;
-            border-radius: 12px;
-            background-color: #1c1c1e;
-            background-image: linear-gradient(90deg, #1c1c1e 0px, #2c2c2d 40px, #1c1c1e 80px);
-            background-size: 600px;
-            animation: shimmer 1.5s infinite linear;
-        }
+        @keyframes shimmer { 0% { background-position: -500px 0; } 100% { background-position: 500px 0; } }
+        .thumbnail-placeholder { width: 100%; aspect-ratio: 4 / 3; border-radius: 12px; background-color: #1c1c1e; background-image: linear-gradient(90deg, #1c1c1e 0px, #2c2c2d 40px, #1c1c1e 80px); background-size: 600px; animation: shimmer 1.5s infinite linear; }
     </style>
 </head>
 <body>
-<!-- HTML Body remains unchanged -->
-<div id="app-container">
+<!-- Login View -->
+<div id="login-container" class="hidden">
+    <form id="login-form">
+        <h1>File Transfer</h1>
+        <div class="input-group">
+            <label for="username-input">Username</label>
+            <input type="text" id="username-input" name="username" required autocomplete="username">
+        </div>
+        <div class="input-group">
+            <label for="password-input">Password</label>
+            <input type="password" id="password-input" name="password" required autocomplete="current-password">
+        </div>
+        <div class="options-group">
+            <input type="checkbox" id="remember-me-checkbox">
+            <label for="remember-me-checkbox">Remember me</label>
+        </div>
+        <button type="submit" id="login-btn">Login</button>
+        <p id="login-error"></p>
+    </form>
+</div>
+
+<!-- App View -->
+<div id="app-container" class="hidden">
     <div id="header">
         <h1 data-i18n="headerTitle">File Transfer</h1>
         <div id="header-buttons">
@@ -110,6 +120,7 @@
         </div>
         <div id="dropdown-menu">
             <a href="#" id="clear-records-btn" class="danger" data-i18n="clearRecordsBtn">Clear Records</a>
+            <a href="#" id="logout-btn" data-i18n="logoutBtn">Logout</a>
         </div>
     </div>
     <div id="message-list"></div>
@@ -137,7 +148,6 @@
 </div>
 <input type="file" id="image-picker" accept="image/*" multiple>
 <input type="file" id="file-picker" multiple>
-
 <div id="image-overlay">
     <img id="fullscreen-image" src="" alt="Fullscreen Image Preview">
 </div>
@@ -147,10 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- i18n Setup ---
     const translations = {
         en: {
-            headerTitle: "File Transfer", refreshBtnTitle: "Refresh Messages", menuBtnTitle: "Menu", clearRecordsBtn: "Clear Records", attachmentBtnTitle: "Attach", uploadImage: "Image", uploadFile: "File", textInputPlaceholder: "Type something...", sendBtnTitle: "Send", confirmClearRecords: "Are you sure you want to clear all local message records? This action cannot be undone.", withdraw: "Withdraw", withdrawing: "Withdrawing...", download: "Download", uploading: "Uploading...", withdrawFailed: "Withdraw failed!", confirmLocalDelete: "The file may not exist on the server.\n\nDelete this record locally anyway?", defaultTextFilename: "TextMessage", uploadFailed: "Upload Failed"
+            headerTitle: "File Transfer", logoutBtn: "Logout", refreshBtnTitle: "Refresh Messages", menuBtnTitle: "Menu", clearRecordsBtn: "Clear Records", attachmentBtnTitle: "Attach", uploadImage: "Image", uploadFile: "File", textInputPlaceholder: "Type something...", sendBtnTitle: "Send", confirmClearRecords: "Are you sure you want to clear all local message records? This action cannot be undone.", withdraw: "Withdraw", withdrawing: "Withdrawing...", download: "Download", uploading: "Uploading...", withdrawFailed: "Withdraw failed!", confirmLocalDelete: "The file may not exist on the server.\n\nDelete this record locally anyway?", defaultTextFilename: "TextMessage", uploadFailed: "Upload Failed"
         },
         zh: {
-            headerTitle: "文件传输", refreshBtnTitle: "刷新消息", menuBtnTitle: "菜单", clearRecordsBtn: "清空记录", attachmentBtnTitle: "附件", uploadImage: "图片", uploadFile: "文件", textInputPlaceholder: "输入文本...", sendBtnTitle: "发送", confirmClearRecords: "确定要清空所有本地消息记录吗？此操作不可恢复。", withdraw: "撤回", withdrawing: "撤回中...", download: "下载", uploading: "正在上传...", withdrawFailed: "撤回失败！", confirmLocalDelete: "服务器可能已不存在该文件。\n\n是否仅从本地删除此条记录？", defaultTextFilename: "文本消息", uploadFailed: "上传失败"
+            headerTitle: "文件传输", logoutBtn: "退出登录", refreshBtnTitle: "刷新消息", menuBtnTitle: "菜单", clearRecordsBtn: "清空记录", attachmentBtnTitle: "附件", uploadImage: "图片", uploadFile: "文件", textInputPlaceholder: "输入文本...", sendBtnTitle: "发送", confirmClearRecords: "确定要清空所有本地消息记录吗？此操作不可恢复。", withdraw: "撤回", withdrawing: "撤回中...", download: "下载", uploading: "正在上传...", withdrawFailed: "撤回失败！", confirmLocalDelete: "服务器可能已不存在该文件。\n\n是否仅从本地删除此条记录？", defaultTextFilename: "文本消息", uploadFailed: "上传失败"
         }
     };
     const userLang = navigator.language.slice(0, 2);
@@ -164,6 +174,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Element Selectors ---
+    const loginContainer = document.getElementById('login-container');
+    const loginForm = document.getElementById('login-form');
+    const usernameInput = document.getElementById('username-input');
+    const passwordInput = document.getElementById('password-input');
+    const rememberMeCheckbox = document.getElementById('remember-me-checkbox');
+    const loginError = document.getElementById('login-error');
+    const logoutBtn = document.getElementById('logout-btn');
+    const appContainer = document.getElementById('app-container');
     const messageList = document.getElementById('message-list');
     const attachmentBtn = document.getElementById('attachment-btn');
     const attachmentPopover = document.getElementById('attachment-popover');
@@ -180,16 +198,49 @@ document.addEventListener('DOMContentLoaded', () => {
     const imageOverlay = document.getElementById('image-overlay');
     const fullscreenImage = document.getElementById('fullscreen-image');
 
-    const STORAGE_KEY = 'mobile-upload-messages';
+    // --- App State & Storage Keys ---
+    let currentUser = null;
+    const OLD_STORAGE_KEY = 'mobile-upload-messages';
+    const CREDENTIALS_KEY = 'file-transfer-credentials';
+    const LAST_USER_KEY = 'last-active-user';
     let saveTimeout = null;
 
-    // --- Storage Management ---
-    const saveMessagesNow = (messages) => {
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-        } catch (e) {
-            console.error("Failed to save messages immediately:", e);
+    // --- View Management ---
+    const showLoginView = () => {
+        currentUser = null;
+        appContainer.classList.add('hidden');
+        loginContainer.classList.remove('hidden');
+        passwordInput.value = '';
+        messageList.innerHTML = '';
+        loginError.textContent = '';
+    };
+
+    const showAppView = (username) => {
+        currentUser = username;
+        loginError.textContent = '';
+        loginContainer.classList.add('hidden');
+        appContainer.classList.remove('hidden');
+    };
+
+    // --- API & Auth ---
+    const apiFetch = async (url, options = {}) => {
+        const response = await fetch(url, options);
+        if (response.status === 401) {
+            showLoginView();
+            throw new Error('Unauthorized');
         }
+        return response;
+    };
+
+    // --- Storage Management ---
+    const getStorageKey = () => currentUser ? `messages-${currentUser}` : null;
+    
+    const saveMessagesNow = (messages) => {
+        const key = getStorageKey();
+        if (!key) return;
+        try {
+            localStorage.setItem(key, JSON.stringify(messages));
+        } catch (e) { console.error("Failed to save messages immediately:", e); }
     };
 
     const scheduleSave = (messages) => {
@@ -199,11 +250,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const storage = {
         getMessages: () => {
+            const key = getStorageKey();
+            if (!key) return [];
             const now = Date.now();
-            const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+            const twentyNineDaysAgo = now - 29 * 24 * 60 * 60 * 1000;
             try {
-                const messages = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-                const recentMessages = messages.filter(m => m.timestamp > thirtyDaysAgo);
+                const messages = JSON.parse(localStorage.getItem(key) || '[]');
+                const recentMessages = messages.filter(m => m.timestamp > twentyNineDaysAgo);
                 if (messages.length !== recentMessages.length) {
                     saveMessagesNow(recentMessages);
                 }
@@ -229,8 +282,10 @@ document.addEventListener('DOMContentLoaded', () => {
             saveMessagesNow(msgs);
         },
         clearAll: () => {
+            const key = getStorageKey();
+            if (!key) return;
             clearTimeout(saveTimeout);
-            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(key);
         },
         updateMessageDimensions: (id, { width, height }) => {
             const msgs = storage.getMessages();
@@ -241,8 +296,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
+    
+    const migrateOldStorage = () => {
+        const oldData = localStorage.getItem(OLD_STORAGE_KEY);
+        const newKey = getStorageKey();
+        if (oldData && newKey) {
+            console.log(`Migrating data from old key to new key: ${newKey}`);
+            const newData = localStorage.getItem(newKey);
+            if (!newData || JSON.parse(newData).length === 0) {
+                localStorage.setItem(newKey, oldData);
+            }
+            localStorage.removeItem(OLD_STORAGE_KEY);
+        }
+    };
 
-    // --- Utils ---
+    // --- Utils & UI ---
     const formatTimestamp = (ts) => {
         const d = new Date(ts);
         return `${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
@@ -261,12 +329,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const scrollToBottom = () => { messageList.scrollTop = 0; };
     
-    // --- UI Rendering ---
     const renderMessage = (msg) => {
         const isSelf = msg.direction !== 'in';
         const isImage = msg.isImage || (msg.fileName && /\.(jpe?g|png|gif|webp)$/i.test(msg.fileName));
         let contentHtml;
-
         if (isImage && msg.status === 'success' && msg.filePath) {
             const previewUrl = `/preview/${msg.filePath}`; 
             const sizeHtml = msg.size ? `<div class="filesize">${formatBytes(msg.size)}</div>` : '';
@@ -288,7 +354,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const sizeHtml = msg.size ? `<div class="filesize">${formatBytes(msg.size)}</div>` : '';
             contentHtml = `<div class="filename">${escapeHTML(msg.fileName || msg.content)}</div>${sizeHtml}`;
         }
-        
         let footerHtml = '';
         if (msg.status === 'success') {
             const timeStr = formatTimestamp(msg.timestamp);
@@ -296,10 +361,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const withdrawBtn = `<button class="footer-btn withdraw-btn" data-id="${msg.id}" data-path="${msg.filePath}" title="${t('withdraw')}">${t('withdraw')}</button>`;
             footerHtml = `<div class="message-footer"><span class="footer-timestamp">${timeStr}</span>${downloadBtn}${withdrawBtn}</div>`;
         }
-
         const progressHtml = msg.status === 'pending' ? `<div class="status-text">${t('uploading')} 0%</div><div class="progress-bar-container"><div class="progress-bar"></div></div>` : '';
         const errorHtml = msg.status === 'error' ? `<div class="message-footer"><span style="color:var(--error-color);">${t('uploadFailed')}</span></div>` : '';
-        
         const messageHtml = `<div class="message-wrapper ${isSelf ? 'self' : ''}" id="${msg.id}">
             <div class="message-item ${msg.status || 'success'}">
                 <div class="message-content">${contentHtml}</div>
@@ -314,14 +377,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (entry.isIntersecting) {
                 const container = entry.target;
                 const imageUrl = container.dataset.src;
-                
                 const image = new Image();
-                image.src = imageUrl;
+                image.dataset.fullscreenUrl = imageUrl;
+                apiFetch(imageUrl).then(response => response.blob()).then(blob => {
+                    image.src = URL.createObjectURL(blob);
+                }).catch(err => {
+                    if (err.message !== 'Unauthorized') console.error("Error lazy-loading image:", err);
+                });
                 image.alt = "Image preview";
                 image.onload = () => {
+                    URL.revokeObjectURL(image.src);
                     container.innerHTML = '';
                     container.appendChild(image);
-
                     const wrapper = container.closest('.message-wrapper');
                     if (wrapper) {
                         const msgId = wrapper.id;
@@ -331,36 +398,34 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 };
-                
                 observer.unobserve(container);
             }
         });
     }, { root: messageList, rootMargin: "0px 0px 200px 0px" });
 
     const reRenderAllMessages = () => {
+        if (!currentUser) return;
         lazyLoadObserver.disconnect();
         messageList.innerHTML = '';
         storage.getMessages().sort((a, b) => a.timestamp - b.timestamp).forEach(renderMessage);
-        
         const placeholders = document.querySelectorAll('.thumbnail-container[data-src]');
         placeholders.forEach(ph => lazyLoadObserver.observe(ph));
-        
         scrollToBottom();
     };
 
     // --- Core Logic ---
     const fetchAndMergeHistory = async () => {
+        if (!currentUser) return;
         try {
             refreshBtn.firstElementChild.style.animation = 'spin 1s linear infinite';
-            const response = await fetch('/history'); if (!response.ok) throw new Error('Failed to fetch history');
+            const response = await apiFetch('/history');
             const serverHistory = await response.json(); const localMessages = storage.getMessages();
             const serverFilePaths = new Set(serverHistory.map(m => m.filePath));
             let uiNeedsUpdate = false;
-
-            const daysAgo = Date.now() - 29 * 24 * 60 * 60 * 1000;
+            const twentyNineDaysAgo = Date.now() - 29 * 24 * 60 * 60 * 1000;
             const messagesToDelete = [];
             localMessages.forEach(localMsg => {
-                if (localMsg.status === 'success' && localMsg.filePath && localMsg.timestamp > daysAgo && !serverFilePaths.has(localMsg.filePath)) {
+                if (localMsg.status === 'success' && localMsg.filePath && localMsg.timestamp > twentyNineDaysAgo && !serverFilePaths.has(localMsg.filePath)) {
                     messagesToDelete.push(localMsg.id);
                 }
             });
@@ -368,7 +433,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 messagesToDelete.forEach(id => storage.removeMessage(id));
                 uiNeedsUpdate = true;
             }
-            
             const updatedLocalMessages = storage.getMessages();
             const localFilePaths = new Set(updatedLocalMessages.map(m => m.filePath).filter(Boolean));
             serverHistory.forEach(serverMsg => {
@@ -382,10 +446,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     uiNeedsUpdate = true;
                 }
             });
-
             if (uiNeedsUpdate) reRenderAllMessages();
-        } catch (error) { console.error("Error fetching or merging history:", error); }
-        finally { refreshBtn.firstElementChild.style.animation = ''; }
+        } catch (error) {
+            if (error.message !== 'Unauthorized') console.error("Error fetching or merging history:", error);
+        } finally { 
+            if(refreshBtn.firstElementChild) refreshBtn.firstElementChild.style.animation = ''; 
+        }
     };
 
     const handleFiles = (files) => {
@@ -403,7 +469,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const uploadFile = (file, originalTextContent = null) => {
         const isText = originalTextContent !== null;
         const isImage = !isText && file.type.startsWith('image/');
-
         const message = {
             id: `msg-local-${Date.now()}-${Math.random()}`, content: isText ? originalTextContent : file.name,
             fileName: file.name, size: file.size, isText: isText, 
@@ -417,14 +482,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const stat = msgEl?.querySelector('.status-text');
         const formData = new FormData(); formData.append('file', file); formData.append('isText', String(isText));
         if (isText) formData.append('textContent', originalTextContent);
-        const xhr = new XMLHttpRequest(); xhr.open('POST', '/upload', true);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload', true);
+        xhr.withCredentials = true; 
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable && bar) {
-                const p = Math.round((e.loaded / e.total) * 100); bar.style.width = p + '%';
-                if (stat) stat.textContent = `${t('uploading')} ${p}%`;
+               const p = Math.round((e.loaded / e.total) * 100); bar.style.width = p + '%';
+               if (stat) stat.textContent = `${t('uploading')} ${p}%`;
             }
         };
         xhr.onload = () => {
+            if (xhr.status === 401) {
+                showLoginView();
+                return;
+            }
             if (xhr.status === 200) {
                 const res = JSON.parse(xhr.responseText);
                 storage.updateMessage(message.id, { status: 'success', filePath: res.filePath, timestamp: Date.now() });
@@ -441,6 +512,48 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- Event Listeners ---
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        loginError.textContent = '';
+        const username = usernameInput.value;
+        const password = passwordInput.value;
+        try {
+            const response = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            if (response.ok) {
+                localStorage.setItem(LAST_USER_KEY, username); // Set the active user
+                if (rememberMeCheckbox.checked) {
+                    localStorage.setItem(CREDENTIALS_KEY, JSON.stringify({ username, password }));
+                } else {
+                    localStorage.removeItem(CREDENTIALS_KEY);
+                }
+                showAppView(username);
+                migrateOldStorage();
+                await initializeMainApp();
+            } else {
+                const data = await response.json();
+                loginError.textContent = data.error || "Login failed.";
+            }
+        } catch (error) {
+            loginError.textContent = "Network error. Could not connect to server.";
+        }
+    });
+
+    logoutBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+            await apiFetch('/logout', { method: 'POST' });
+        } catch (error) {
+            if (error.message !== 'Unauthorized') console.error('Logout API call failed, but logging out locally anyway.', error);
+        } finally {
+            localStorage.removeItem(LAST_USER_KEY);
+            // Don't remove credentials on logout, user might want them for next login.
+            showLoginView();
+        }
+    });
     refreshBtn.addEventListener('click', fetchAndMergeHistory);
     imageBtn.addEventListener('click', () => imagePicker.click());
     fileBtn.addEventListener('click', () => filePicker.click());
@@ -462,38 +575,80 @@ document.addEventListener('DOMContentLoaded', () => {
     messageList.addEventListener('click', async (e) => {
         const thumbnail = e.target.closest('.thumbnail-container img');
         if (thumbnail) {
-            fullscreenImage.src = thumbnail.src; 
+            fullscreenImage.src = thumbnail.dataset.fullscreenUrl;
             imageOverlay.style.display = 'flex';
             return;
         }
-        
         const target = e.target.closest('button.footer-btn'); if (!target) return;
-        const id = target.dataset.id, path = target.dataset.path;
-        if (target.classList.contains('download-btn')) { window.location.href = `/download?path=${encodeURIComponent(path)}`; }
+       const id = target.dataset.id, path = target.dataset.path;
+        if (target.classList.contains('download-btn')) { 
+            window.location.href = `/download?path=${encodeURIComponent(path)}`; 
+        }
         else if (target.classList.contains('withdraw-btn')) {
             target.disabled = true; target.textContent = t('withdrawing');
             try {
-                const response = await fetch('/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filePath: path }) });
-                if (response.ok) {
-                    const localMessage = storage.getMessages().find(m => m.id === id);
-                    if(localMessage) storage.removeMessage(id);
-                    document.getElementById(id)?.remove();
-                } else { throw new Error(await response.text()); }
+                await apiFetch('/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filePath: path }) });
+               const localMessage = storage.getMessages().find(m => m.id === id);
+                if(localMessage) storage.removeMessage(id);
+                document.getElementById(id)?.remove();
             } catch (error) {
-                console.error('Withdraw failed:', error);
-                if (confirm(t('withdrawFailed') + "\n\n" + t('confirmLocalDelete'))) {
-                    storage.removeMessage(id);
-                    document.getElementById(id)?.remove();
-                } else { target.disabled = false; target.textContent = t('withdraw'); }
+                if (error.message !== 'Unauthorized') {
+                    console.error('Withdraw failed:', error);
+                    if (confirm(t('withdrawFailed') + "\n\n" + t('confirmLocalDelete'))) {
+                        storage.removeMessage(id);
+                        document.getElementById(id)?.remove();
+                    } else { target.disabled = false; target.textContent = t('withdraw'); }
+                }
             }
         }
     });
     
-    // --- Initial Load ---
-    const initialLoad = async () => {
-        applyStaticTranslations(); reRenderAllMessages(); await fetchAndMergeHistory();
+    // --- Initial Load & Startup Logic ---
+    const initializeMainApp = async () => {
+        applyStaticTranslations(); 
+        reRenderAllMessages(); 
+        await fetchAndMergeHistory();
     };
-    initialLoad();
+
+    const startup = async () => {
+        // Populate login form if credentials were saved (for convenience)
+        const savedCreds = localStorage.getItem(CREDENTIALS_KEY);
+        if (savedCreds) {
+            try {
+                const { username } = JSON.parse(savedCreds);
+                usernameInput.value = username;
+            } catch (e) {												  
+                console.error("Could not parse saved credentials", e);
+                localStorage.removeItem(CREDENTIALS_KEY);
+            }
+        }
+
+        // Check for an active session by fetching history
+        const lastUser = localStorage.getItem(LAST_USER_KEY);
+        if (lastUser) {
+            // Assume we are logged in as the last user and try to verify.
+            currentUser = lastUser;
+            try {
+                await apiFetch('/history');
+                // If it succeeds, the session is valid for `lastUser`.
+                showAppView(lastUser);
+                await initializeMainApp();
+            } catch (error) {
+                // apiFetch already handled the 401 by showing the login view.
+                // It will also have cleared currentUser.
+                if (error.message !== 'Unauthorized') {
+                    console.error("Startup check failed:", error);
+                    loginError.textContent = "Could not connect to server.";
+                }
+            }
+        } else {
+            // No last active user, must show login page.
+            showLoginView();		 
+        }
+    };
+    
+    startup();
+
     const styleSheet = document.createElement("style");
     styleSheet.innerText = `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
     document.head.appendChild(styleSheet);
