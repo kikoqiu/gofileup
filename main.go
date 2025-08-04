@@ -637,6 +637,18 @@ func previewHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Setup and Helper Functions ---
+func setWorkingDirectory() {
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("FATAL: Could not get executable path: %v", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	if err := os.Chdir(exeDir); err != nil {
+		log.Fatalf("FATAL: Could not change to executable directory: %v", err)
+	}
+	log.Printf("Working directory set to: %s", exeDir)
+}
+
 func truncateToDay(t time.Time) time.Time {
 	return t.Truncate(24 * time.Hour)
 }
@@ -770,6 +782,7 @@ func checkAndGenerateCerts() {
 }
 
 func main() {
+	setWorkingDirectory()
 	loadConfig()
 	loadUsers()
 	generateReadmeIfNeeded()
